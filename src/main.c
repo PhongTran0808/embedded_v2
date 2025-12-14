@@ -4,18 +4,22 @@
 #include "nvs_flash.h"
 #include "main.h" // Chứa BUFFER_SIZE
 #include "max30102_api.h"
-#include "algorithm.h"
+#include "algorithm.h" 
 #include "i2c_api.h" 
-#include "oled_driver.h" // Mini-Driver mới
+#include "oled_driver.h" 
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h> 
 #include "esp_log.h" 
 #include <math.h> 
+#include <string.h> 
 
 static const char *TAG = "MAX30102_APP";
 
-// ... (Dữ liệu Buffer giữ nguyên) ...
+// =========================================================
+// DỮ LIỆU VÀ BIẾN GLOBAL
+// =========================================================
+
 int32_t red_data = 0;
 int32_t ir_data = 0;
 int32_t red_data_buffer[BUFFER_SIZE]; 
@@ -29,7 +33,13 @@ Oled_t oled_dev;
 
 // Biến đếm khung hình (Frame Counter)
 static int heart_frame_counter = 0; 
+// Biến lưu trữ kết quả HRV và Stress
+static float g_hrv_rmssd = 0.0f;
+static char g_stress_status[16] = "N/A"; 
 
+// =========================================================
+// KHAI BÁO HÀM CỤC BỘ
+// =========================================================
 void fill_buffers_data();
 void sensor_data_reader(void *pvParameters);
 
@@ -43,7 +53,7 @@ void display_task_values(int heart_rate, double spo2, double correlation) {
 
     if (correlation >= 0.7 && heart_rate >= 40 && spo2 > 80.0) {
         
-        // 1. Hiển thị Trái tim đập (Ở trang 0, CỘT 13 - vị trí an toàn cho kích thước 16 pixel)
+        // 1. Hiển thị Trái tim đập
         oled_draw_heart_animation(&oled_dev, 0, 13, current_frame); 
 
         // 2. Hiển thị HR (ở trang 0, cột 0)
@@ -54,10 +64,20 @@ void display_task_values(int heart_rate, double spo2, double correlation) {
         sprintf(buffer, "SpO2: %.1f %%", spo2);
         oled_draw_text(&oled_dev, 1, 0, buffer); 
         
-        // 4. Hiển thị Quality (ở trang 2, cột 0)
-        sprintf(buffer, "Qual: %.1f", correlation);
-        oled_draw_text(&oled_dev, 2, 0, buffer); 
+        // 4. Hiển thị HRV (ở trang 2, cột 0)
+        if (g_hrv_rmssd > 0.0f) {
+            sprintf(buffer, "HRV: %.1f ms", g_hrv_rmssd);
+        } else {
+            sprintf(buffer, "HRV: N/A");
+        }
+        oled_draw_text(&oled_dev, 2, 0, buffer);
+        
+        // 5. HIỂN THỊ TRẠNG THÁI CƠ THỂ (ở trang 3, cột 0)
+        sprintf(buffer, "Status: %s", g_stress_status);
+        oled_draw_text(&oled_dev, 3, 0, buffer); 
+
     } else {
+        // Cảnh báo
         oled_draw_text(&oled_dev, 0, 0, "Input Your Finger"); 
         
         if (correlation > 0.0) {
@@ -115,10 +135,13 @@ void sensor_data_reader(void *pvParameters)
         fill_buffers_data();
 
         temperature = get_max30102_temp();
+        // Loại bỏ DC và Trendline TRƯỚC khi tính SpO2/HR/HRV
         remove_dc_part(ir_data_buffer, red_data_buffer, &ir_mean, &red_mean);
         remove_trend_line(ir_data_buffer);
         remove_trend_line(red_data_buffer);
+        
         double pearson_correlation = correlation_datay_datax(red_data_buffer, ir_data_buffer);
+        // Lưu ý: HR Autocorrelation cần IR data đã loại bỏ trend/DC.
         int heart_rate = calculate_heart_rate(ir_data_buffer, &r0_autocorrelation, auto_correlationated_data);
         
         bool is_hr_valid = (heart_rate >= 40 && heart_rate <= 200);
@@ -126,13 +149,21 @@ void sensor_data_reader(void *pvParameters)
         if(pearson_correlation >= 0.7 && is_hr_valid){ 
             double spo2 = spo2_measurement(ir_data_buffer, red_data_buffer, ir_mean, red_mean);
             
-            printf("\n| SUCCESSFUL MEASUREMENT (HR:%d, SpO2:%.2f, Temp:%.2f)\n\n", heart_rate, spo2, temperature);
+            // TÍNH HRV (RMSSD) VÀ DỰ ĐOÁN STRESS
+            g_hrv_rmssd = calculate_hrv_rmssd(ir_data_buffer, BUFFER_SIZE);
+            predict_stress(heart_rate, spo2, g_hrv_rmssd, g_stress_status);
+
+            printf("\n| SUCCESSFUL MEASUREMENT (HR:%d, SpO2:%.2f, HRV:%.1f, Status:%s)\n\n", heart_rate, spo2, g_hrv_rmssd, g_stress_status);
             
             heart_frame_counter++; 
             display_task_values(heart_rate, spo2, pearson_correlation); 
 
         } else {
              printf("\n| WARNING: Low signal quality (Corr: %.2f). Temp:%.2f. Displaying prompt.\n\n", pearson_correlation, temperature);
+             
+             // Reset trạng thái nếu tín hiệu kém
+             strcpy(g_stress_status, "N/A");
+             g_hrv_rmssd = 0.0f;
              
              display_task_values(0, 0.0, pearson_correlation); 
         }
@@ -153,4 +184,4 @@ void fill_buffers_data()
         red_data = 0;
         vTaskDelay(pdMS_TO_TICKS(DELAY_AMOSTRAGEM));
     }
-}
+}   

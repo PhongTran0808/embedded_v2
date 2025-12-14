@@ -12,7 +12,7 @@ static const char *OLED_TAG = "OLED_DRV";
 #define ACK_CHECK_EN 0x1 
 
 // =========================================================
-// DỮ LIỆU FONT TRÁI TIM (8x8 pixels)
+// DỮ LIỆU FONT TRÁI TIM (8x8 pixels) - ĐƯỢC ĐẶT Ở ĐÂY
 // =========================================================
 
 // Khung 1: Tim nhỏ hơn
@@ -62,23 +62,19 @@ esp_err_t oled_init(Oled_t *oled) {
 
     if ((ret = oled_send_command(OLED_CMD_DISPLAY_OFF)) != ESP_OK) return ret;
     
-    // 1. Cấu hình MUX và OFFSET
     if ((ret = oled_send_command(OLED_CMD_SET_MUX_RATIO)) != ESP_OK) return ret;
     if ((ret = oled_send_command(0x3F)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0xD3)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0x00)) != ESP_OK) return ret; 
     
-    // 2. Cấu hình Địa chỉ (Page Addressing Mode)
     if ((ret = oled_send_command(0x20)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(OLED_CMD_SET_PAGE_ADDR_MODE)) != ESP_OK) return ret; 
     
-    // 3. Cấu hình Clock và Tín hiệu
     if ((ret = oled_send_command(OLED_CMD_SET_DISPLAY_CLK_DIV)) != ESP_OK) return ret;
     if ((ret = oled_send_command(0x80)) != ESP_OK) return ret;
     if ((ret = oled_send_command(OLED_CMD_SET_CHARGE_PUMP)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0x14)) != ESP_OK) return ret; 
     
-    // 4. Các lệnh hiển thị cuối (A1/C8 là cấu hình mặc định cho hướng đúng)
     if ((ret = oled_send_command(0xA1)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0xC8)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0xDA)) != ESP_OK) return ret; 
@@ -113,7 +109,8 @@ void oled_update_display(Oled_t *oled) {
 
         // Gửi dữ liệu
         uint8_t tx_buf[129];
-        tx_buf[0] = 0x40; // Data Stream
+        // Sửa lỗi: Dùng macro đã định nghĩa trong header
+        tx_buf[0] = OLED_CONTROL_BYTE_DATA_STREAM; 
         memcpy(&tx_buf[1], &oled->buffer[page * 128], 128);
         
         i2c_cmd_handle_t cmd_data = i2c_cmd_link_create();
@@ -137,7 +134,6 @@ void oled_draw_text(Oled_t *oled, int page, int col, const char *text) {
 
         const uint8_t *font_data = font8x8_basic_tr[char_code];
 
-        // Sao chép dữ liệu Font trực tiếp (không xoay bit)
         memcpy(&oled->buffer[page * 128 + start_segment + i * 8], font_data, 8);
     }
 }
@@ -148,35 +144,30 @@ void oled_draw_heart_animation(Oled_t *oled, int page, int col, int frame) {
     const uint8_t *heart_data;
     
     if (frame % 2 == 0) {
-        heart_data = HEART_FRAME_1;
+        heart_data = HEART_FRAME_1; // Sử dụng dữ liệu nhỏ 8x8
     } else {
-        heart_data = HEART_FRAME_2;
+        heart_data = HEART_FRAME_2; // Sử dụng dữ liệu lớn 8x8
     }
 
     int start_segment = col * 8; 
     
-    // Mảng tạm thời để lưu dữ liệu đã lật (Mirror)
+    // Mảng tạm thời đã được lật ngang (Mirror)
     uint8_t temp_heart[8];
-    
-    // 1. LẬT NGANG DỮ LIỆU (Mirroring the bytes)
     for (int i = 0; i < 8; i++) {
-        // Đảo ngược thứ tự các byte trong mảng
         temp_heart[i] = heart_data[7 - i]; 
     }
-
-    // 2. VẼ VÀ PHÓNG TO (16x8 pixel)
+    
+    // Vẽ 8x8
     for (int byte_index = 0; byte_index < 8; byte_index++) {
         uint8_t current_byte = temp_heart[byte_index];
-        
-        // Đảo ngược bit (INVERT) để hiển thị Trắng trên nền Đen
         uint8_t inverted_byte = ~current_byte; 
         
-        // Vẽ lần 1 (cột 13)
+        // Vẽ lần 1 (cột hiện tại)
         oled->buffer[page * 128 + start_segment + byte_index] = inverted_byte;
 
-        // Vẽ lần 2 (cột 14, để phóng to ngang 2 lần)
+        // PHÓNG TO NGANH 2X: Vẽ thêm 8 pixel nữa ngay bên cạnh
         if (start_segment + 8 + byte_index < 128) {
-             oled->buffer[page * 128 + start_segment + 8 + byte_index] = inverted_byte;
+            oled->buffer[page * 128 + start_segment + 8 + byte_index] = inverted_byte;
         }
     }
 }
