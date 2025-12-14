@@ -1,26 +1,21 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h" 
-#include "esp_wifi.h"       
 #include "esp_system.h"
-#include "esp_event.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"
-#include "driver/i2c.h"
-#include "main.h"
+#include "main.h" // Chứa BUFFER_SIZE
 #include "max30102_api.h"
 #include "algorithm.h"
 #include "i2c_api.h" 
-//#include "ssd1306.h" // <<< ĐÃ LOẠI BỎ OLED >>>
+#include "oled_driver.h" // Mini-Driver mới
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h> 
 #include "esp_log.h" 
+#include <math.h> 
 
 static const char *TAG = "MAX30102_APP";
 
-TaskHandle_t processor_handle = NULL;
-TaskHandle_t sensor_reader_handle = NULL;
-
+// ... (Dữ liệu Buffer giữ nguyên) ...
 int32_t red_data = 0;
 int32_t ir_data = 0;
 int32_t red_data_buffer[BUFFER_SIZE]; 
@@ -28,12 +23,53 @@ int32_t ir_data_buffer[BUFFER_SIZE];
 double auto_correlationated_data[BUFFER_SIZE];
 
 #define DELAY_AMOSTRAGEM 40
-#define DEBUG false 
-#define CYCLE_DELAY_MS 500 // Độ trễ giữa các lần đo
+#define CYCLE_DELAY_MS 500 
 
-// <<< ĐÃ LOẠI BỎ KHAI BÁO SSD1306_t dev; >>>
+Oled_t oled_dev; 
+
+// Biến đếm khung hình (Frame Counter)
+static int heart_frame_counter = 0; 
 
 void fill_buffers_data();
+void sensor_data_reader(void *pvParameters);
+
+
+void display_task_values(int heart_rate, double spo2, double correlation) {
+    char buffer[32];
+    
+    oled_clear_screen(&oled_dev); 
+    
+    int current_frame = heart_frame_counter % 2; 
+
+    if (correlation >= 0.7 && heart_rate >= 40 && spo2 > 80.0) {
+        
+        // 1. Hiển thị Trái tim đập (Ở trang 0, CỘT 13 - vị trí an toàn cho kích thước 16 pixel)
+        oled_draw_heart_animation(&oled_dev, 0, 13, current_frame); 
+
+        // 2. Hiển thị HR (ở trang 0, cột 0)
+        sprintf(buffer, "HR: %d bpm", heart_rate);
+        oled_draw_text(&oled_dev, 0, 0, buffer); 
+
+        // 3. Hiển thị SpO2 (ở trang 1, cột 0)
+        sprintf(buffer, "SpO2: %.1f %%", spo2);
+        oled_draw_text(&oled_dev, 1, 0, buffer); 
+        
+        // 4. Hiển thị Quality (ở trang 2, cột 0)
+        sprintf(buffer, "Qual: %.1f", correlation);
+        oled_draw_text(&oled_dev, 2, 0, buffer); 
+    } else {
+        oled_draw_text(&oled_dev, 0, 0, "Input Your Finger"); 
+        
+        if (correlation > 0.0) {
+            sprintf(buffer, "Low Qual: %.1f", correlation);
+            oled_draw_text(&oled_dev, 1, 0, buffer); 
+        } else {
+            oled_draw_text(&oled_dev, 1, 0, "Waiting for signal");
+        }
+    }
+    
+    oled_update_display(&oled_dev); 
+}
 
 void app_main(void)
 {
@@ -43,16 +79,24 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    
+    i2c_bus_driver_install(); 
 
-    // 1. Khởi tạo I2C BUS cho MAX30102
-    // Chúng ta sử dụng lại hàm i2c_init đã bị xóa trước đó để đảm bảo Bus được khởi tạo.
-    // Nếu bạn đang dùng hàm i2c_init gốc trong i2c_api.c, hãy dùng nó.
-    // Dưới đây là giả định bạn đã đổi tên hàm thành max30102_i2c_bus_init
-    // và chúng ta sẽ đổi nó thành i2c_init() cho đơn giản.
-    i2c_init(); // Khởi tạo I2C Bus
+    ESP_LOGI(TAG, "Initializing MAX30102...");
+    max30102_init(&max30102_configuration); 
+    
+    ESP_LOGI(TAG, "Initializing OLED...");
+    if(oled_init(&oled_dev) != ESP_OK) {
+        ESP_LOGE(TAG, "OLED initialization FAILED! Check address/Bus integrity.");
+    }
+    
+    oled_draw_text(&oled_dev, 0, 0, "System Ready"); 
+    oled_update_display(&oled_dev); 
+    
+    vTaskDelay(pdMS_TO_TICKS(500)); 
 
-    ESP_LOGI(TAG, "Starting MAX30102 sensor task on Core 1");
-    xTaskCreatePinnedToCore(sensor_data_reader, "Data", 10240, NULL, 2, &sensor_reader_handle, 1);
+    ESP_LOGI(TAG, "Starting sensor reader task on Core 1");
+    xTaskCreatePinnedToCore(sensor_data_reader, "Data", 10240, NULL, 2, NULL, 1);
 }
 
 
@@ -60,8 +104,6 @@ void sensor_data_reader(void *pvParameters)
 {
     vTaskDelay(pdMS_TO_TICKS(100)); 
     
-    // Khởi tạo cảm biến
-    max30102_init(&max30102_configuration); 
     init_time_array();
     
     uint64_t ir_mean;
@@ -70,10 +112,8 @@ void sensor_data_reader(void *pvParameters)
     double r0_autocorrelation;
 
     for(;;){
-        ESP_LOGI(TAG, "Collecting data buffer...");
         fill_buffers_data();
 
-        // Xử lý dữ liệu
         temperature = get_max30102_temp();
         remove_dc_part(ir_data_buffer, red_data_buffer, &ir_mean, &red_mean);
         remove_trend_line(ir_data_buffer);
@@ -81,33 +121,21 @@ void sensor_data_reader(void *pvParameters)
         double pearson_correlation = correlation_datay_datax(red_data_buffer, ir_data_buffer);
         int heart_rate = calculate_heart_rate(ir_data_buffer, &r0_autocorrelation, auto_correlationated_data);
         
-        // <<< LOGIC LỌC TỐI ƯU HÓA >>>
         bool is_hr_valid = (heart_rate >= 40 && heart_rate <= 200);
 
-        // --- Hiển thị Serial Monitor ---
         if(pearson_correlation >= 0.7 && is_hr_valid){ 
             double spo2 = spo2_measurement(ir_data_buffer, red_data_buffer, ir_mean, red_mean);
             
-            printf("\n=======================================\n");
-            printf("| SUCCESSFUL MEASUREMENT\n");
-            printf("| HEART_RATE: %d bpm\n", heart_rate); 
-            printf("| SPO2: %.2f%%\n", spo2);
-            printf("| Temperature: %.2f C\n", temperature); 
-            printf("=======================================\n\n");
+            printf("\n| SUCCESSFUL MEASUREMENT (HR:%d, SpO2:%.2f, Temp:%.2f)\n\n", heart_rate, spo2, temperature);
             
+            heart_frame_counter++; 
+            display_task_values(heart_rate, spo2, pearson_correlation); 
+
         } else {
-             // Serial Monitor cảnh báo
-             printf("\n=======================================\n");
-             printf("| WARNING: Low signal quality (Corr: %.2f).\n", pearson_correlation);
-             printf("| HR/SpO2 unreliable.\n");
-             printf("| Temperature: %.2f C\n", temperature);
-             if (!is_hr_valid) {
-                 printf("| (HR filtered: %d bpm)\n", heart_rate);
-             }
-             printf("=======================================\n\n");
+             printf("\n| WARNING: Low signal quality (Corr: %.2f). Temp:%.2f. Displaying prompt.\n\n", pearson_correlation, temperature);
+             
+             display_task_values(0, 0.0, pearson_correlation); 
         }
-        
-        // <<< ĐÃ LOẠI BỎ CẬP NHẬT OLED >>>
         
         vTaskDelay(pdMS_TO_TICKS(CYCLE_DELAY_MS));
     }

@@ -26,7 +26,7 @@ void read_max30102_fifo(int32_t *red_data, int32_t *ir_data)
 
     i2c_sensor_write(&fifo_reg, 1);
 
-    i2c_sensor_read(&un_temp, 6);
+    i2c_sensor_read(un_temp, 6);
      *red_data += un_temp[0] << 16;
      *red_data += un_temp[1] << 8;
      *red_data += un_temp[2];
@@ -34,6 +34,8 @@ void read_max30102_fifo(int32_t *red_data, int32_t *ir_data)
      *ir_data += un_temp[3] << 16;
      *ir_data += un_temp[4] << 8;
      *ir_data += un_temp[5];
+
+	 vTaskDelay(pdMS_TO_TICKS(1));
 }
 
 
