@@ -14,37 +14,53 @@ double time_array[BUFFER_SIZE];
 #define SPO2_C 112.6898759
 
 // =========================================================
-// CÁC HÀM HỖ TRỢ HRV (MỚI)
+// HÀM HỖ TRỢ PHÂN TÍCH HRV
 // =========================================================
 
 /**
- * @brief Hàm tính RMSSD từ mảng RR-Intervals
+ * @brief Hàm tính RMSSD và SDNN từ mảng RR-Intervals
+ * @param rmssd_out: Con trỏ để lưu trữ kết quả RMSSD
+ * @param sdnn_out: Con trỏ để lưu trữ kết quả SDNN (không dùng trong main.c hiện tại, nhưng được tính)
  */
-static float compute_rmssd_from_rr(const int *rr_data, int count) {
-    if (count < 2) return 0.0f;
+static void compute_hrv_metrics(const int *rr_data, int count, float *rmssd_out, float *sdnn_out) {
+    if (count < 2) {
+        *rmssd_out = 0.0f;
+        *sdnn_out = 0.0f;
+        return;
+    }
     
+    double sum_rr = 0.0;
+    for (int i = 0; i < count; i++) {
+        sum_rr += rr_data[i];
+    }
+    float mean_rr = sum_rr / count;
+
+    // 1. Tính RMSSD (Root Mean Square of Successive Differences)
     double sum_sq_diff = 0.0;
     int valid_diff_count = 0;
-    
-    float artifact_threshold = 0.2f; // Bỏ qua sự khác biệt > 20%
+    float artifact_threshold = 0.2f;
 
     for (int i = 1; i < count; i++) {
         int diff = rr_data[i] - rr_data[i - 1];
-        
-        // Kiểm tra Artifact
+        // Loại bỏ Artifact: Nếu sự khác biệt quá lớn (ví dụ > 20%), bỏ qua
         if (rr_data[i-1] != 0 && (float)abs(diff) > (float)rr_data[i-1] * artifact_threshold) {
              continue; 
         }
-
         sum_sq_diff += (double)diff * diff;
         valid_diff_count++;
     }
     
-    if (valid_diff_count == 0) return 0.0f;
+    *rmssd_out = (valid_diff_count > 0) ? sqrt(sum_sq_diff / valid_diff_count) : 0.0f;
 
-    return sqrt(sum_sq_diff / valid_diff_count);
+
+    // 2. Tính SDNN (Standard Deviation of NN intervals)
+    double sum_sq_dev = 0.0;
+    for (int i = 0; i < count; i++) {
+        double deviation = rr_data[i] - mean_rr;
+        sum_sq_dev += deviation * deviation;
+    }
+    *sdnn_out = (count > 1) ? sqrt(sum_sq_dev / (count - 1)) : 0.0f;
 }
-
 
 /**
  * @brief Hàm tìm các đỉnh R-peak (systolic peak) trong dữ liệu IR
@@ -59,12 +75,13 @@ static int find_peaks(int32_t *ir_data, int *rr_intervals) {
     for (int i = 0; i < BUFFER_SIZE; i++) {
         if (ir_data[i] > max_ir) max_ir = ir_data[i];
     }
+    // 
     int threshold = max_ir * 0.3; 
     
-    // Khoảng cách tối thiểu giữa các đỉnh (300ms = Max 200 BPM -> 7 mẫu)
+    // Khoảng cách tối thiểu giữa các đỉnh (300ms = Max 200 BPM)
     const int min_peak_distance_samples = 300 / DELAY_AMOSTRAGEM; 
     
-    int last_peak_index = -min_peak_distance_samples; // Khởi tạo để đỉnh đầu tiên được chấp nhận
+    int last_peak_index = -min_peak_distance_samples; 
 
     for (int i = 1; i < BUFFER_SIZE - 1; i++) {
         // Kiểm tra: Giá trị > Ngưỡng VÀ Đang ở đỉnh cục bộ
@@ -88,24 +105,25 @@ static int find_peaks(int32_t *ir_data, int *rr_intervals) {
 }
 
 // =========================================================
-// CHỨC NĂNG STRESS/HRV CHÍNH (THAY THẾ HÀM GIẢ LẬP)
+// CHỨC NĂNG PHÂN TÍCH CHÍNH (HRV VÀ STRESS)
 // =========================================================
 
 float calculate_hrv_rmssd(int32_t *ir_data, size_t buffer_size)
 {
-    // Mảng tạm thời để lưu RR-Intervals (ms)
     int rr_intervals[BUFFER_SIZE / 2]; 
+    float rmssd, sdnn;
     
-    // Tìm các đỉnh và tính các khoảng RR-Intervals
     int rr_count = find_peaks(ir_data, rr_intervals);
     
-    // Tính RMSSD từ các khoảng RR tìm được
-    return compute_rmssd_from_rr(rr_intervals, rr_count);
+    compute_hrv_metrics(rr_intervals, rr_count, &rmssd, &sdnn);
+    
+    // Trả về RMSSD làm chỉ số chính cho HRV
+    return rmssd;
 }
 
 void predict_stress(int hr, double spo2, float hrv, char *output_status)
 {
-    // LOGIC NGƯỠNG ĐÃ ĐƯỢC TÍCH HỢP TỪ PHẢN HỒI TRƯỚC
+    // LOGIC NGƯỠNG ĐÃ TÍNH ĐẾN TRẠNG THÁI STRESS/NGUY CƠ DỰA TRÊN HR VÀ HRV
     
     if (hr < 50 || hr > 180 || spo2 < 85.0 || hrv < 10.0f) {
         strcpy(output_status, "Check Sensor");
@@ -124,7 +142,7 @@ void predict_stress(int hr, double spo2, float hrv, char *output_status)
 }
 
 // =========================================================
-// CÁC HÀM CŨ (GIỮ NGUYÊN)
+// CÁC HÀM XỬ LÝ DỮ LIỆU CŨ (GIỮ NGUYÊN)
 // =========================================================
 
 void init_time_array()
