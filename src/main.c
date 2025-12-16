@@ -39,7 +39,7 @@ static const char *TAG = "MAX30102_APP";
 #define LEDC_FREQUENCY 4000 
 
 #define DELAY_AMOSTRAGEM 40
-#define CYCLE_DELAY_MS 500 
+#define CYCLE_DELAY_MS 50 
 
 // BIẾN PLOT BIỂU ĐỒ
 #define HR_PLOT_POINTS 20          // Lưu trữ 20 điểm HR gần nhất (10 giây)
