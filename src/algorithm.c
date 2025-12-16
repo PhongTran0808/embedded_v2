@@ -121,25 +121,16 @@ float calculate_hrv_rmssd(int32_t *ir_data, size_t buffer_size)
     return rmssd;
 }
 
+// =========================================================
+// HÀM PREDICT_STRESS ĐÃ ĐƯỢC XÓA VÀ THAY THẾ BẰNG ML TRONG MAIN.C
+// =========================================================
+/*
 void predict_stress(int hr, double spo2, float hrv, char *output_status)
 {
-    // LOGIC NGƯỠNG ĐÃ TÍNH ĐẾN TRẠNG THÁI STRESS/NGUY CƠ DỰA TRÊN HR VÀ HRV
-    
-    if (hr < 50 || hr > 180 || spo2 < 85.0 || hrv < 10.0f) {
-        strcpy(output_status, "Check Sensor");
-        return;
-    }
-
-    if (hr < 80 && hrv > 50.0f) {
-        strcpy(output_status, "Relax");
-    } 
-    else if (hr > 110 && hrv < 30.0f) {
-        strcpy(output_status, "Stress");
-    }
-    else {
-        strcpy(output_status, "Normal");
-    }
+    // ... Đã bị xóa ...
 }
+*/
+
 
 // =========================================================
 // CÁC HÀM XỬ LÝ DỮ LIỆU CŨ (GIỮ NGUYÊN)

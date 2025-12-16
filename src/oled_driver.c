@@ -7,37 +7,64 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h" 
 #include "driver/i2c.h"
+#include <stdlib.h> // Cần thư viện này để dùng hàm abs()
 
 static const char *OLED_TAG = "OLED_DRV";
 #define ACK_CHECK_EN 0x1 
 
 // =========================================================
-// DỮ LIỆU FONT TRÁI TIM (8x8 pixels) - ĐƯỢC ĐẶT Ở ĐÂY
+// DỮ LIỆU FONT TRÁI TIM
 // =========================================================
 
-// Khung 1: Tim nhỏ hơn
 const uint8_t HEART_FRAME_1[8] = {
-    0b00000000,
-    0b00000000,
-    0b00111100,
-    0b01111110,
-    0b01111110,
-    0b00111100,
-    0b00000000,
-    0b00000000
+    0b00000000, 0b00000000, 0b00111100, 0b01111110,
+    0b01111110, 0b00111100, 0b00000000, 0b00000000
 };
 
-// Khung 2: Tim lớn hơn
 const uint8_t HEART_FRAME_2[8] = {
-    0b00000000,
-    0b01100110,
-    0b11111111,
-    0b11111111,
-    0b01111110,
-    0b00111100,
-    0b00010000,
-    0b00000000
+    0b00000000, 0b01100110, 0b11111111, 0b11111111,
+    0b01111110, 0b00111100, 0b00010000, 0b00000000
 };
+
+// =========================================================
+// HÀM VẼ ĐỒ HỌA (PHẦN BẠN ĐANG THIẾU)
+// =========================================================
+
+// Vẽ 1 điểm ảnh tại tọa độ (x, y)
+void oled_draw_pixel(Oled_t *oled, int x, int y) {
+    if (x < 0 || x >= 128 || y < 0 || y >= 64) return;
+    
+    int page = y / 8;       // Xác định trang (0-7)
+    int bit_offset = y % 8; // Xác định bit trong byte (0-7)
+    
+    // Bật bit tương ứng lên 1
+    oled->buffer[page * 128 + x] |= (1 << bit_offset);
+}
+
+// Vẽ đường thẳng từ (x1, y1) đến (x2, y2) dùng thuật toán Bresenham
+void oled_draw_line(Oled_t *oled, int x1, int y1, int x2, int y2) {
+    int dx = abs(x2 - x1);
+    int dy = abs(y2 - y1);
+    int sx = (x1 < x2) ? 1 : -1;
+    int sy = (y1 < y2) ? 1 : -1;
+    int err = dx - dy;
+
+    while (1) {
+        oled_draw_pixel(oled, x1, y1);
+        
+        if (x1 == x2 && y1 == y2) break;
+        
+        int e2 = 2 * err;
+        if (e2 > -dy) { 
+            err -= dy; 
+            x1 += sx; 
+        }
+        if (e2 < dx) { 
+            err += dx; 
+            y1 += sy; 
+        }
+    }
+}
 
 // =========================================================
 // HÀM I2C CẤP THẤP & KHỞI TẠO
@@ -61,7 +88,6 @@ esp_err_t oled_init(Oled_t *oled) {
     esp_err_t ret;
 
     if ((ret = oled_send_command(OLED_CMD_DISPLAY_OFF)) != ESP_OK) return ret;
-    
     if ((ret = oled_send_command(OLED_CMD_SET_MUX_RATIO)) != ESP_OK) return ret;
     if ((ret = oled_send_command(0x3F)) != ESP_OK) return ret; 
     if ((ret = oled_send_command(0xD3)) != ESP_OK) return ret; 
@@ -106,10 +132,8 @@ void oled_update_display(Oled_t *oled) {
         i2c_master_cmd_begin(I2C_NUM_0, cmd_set, pdMS_TO_TICKS(100));
         i2c_cmd_link_delete(cmd_set);
 
-
         // Gửi dữ liệu
         uint8_t tx_buf[129];
-        // Sửa lỗi: Dùng macro đã định nghĩa trong header
         tx_buf[0] = OLED_CONTROL_BYTE_DATA_STREAM; 
         memcpy(&tx_buf[1], &oled->buffer[page * 128], 128);
         
@@ -144,9 +168,9 @@ void oled_draw_heart_animation(Oled_t *oled, int page, int col, int frame) {
     const uint8_t *heart_data;
     
     if (frame % 2 == 0) {
-        heart_data = HEART_FRAME_1; // Sử dụng dữ liệu nhỏ 8x8
+        heart_data = HEART_FRAME_1; 
     } else {
-        heart_data = HEART_FRAME_2; // Sử dụng dữ liệu lớn 8x8
+        heart_data = HEART_FRAME_2; 
     }
 
     int start_segment = col * 8; 
@@ -162,10 +186,10 @@ void oled_draw_heart_animation(Oled_t *oled, int page, int col, int frame) {
         uint8_t current_byte = temp_heart[byte_index];
         uint8_t inverted_byte = ~current_byte; 
         
-        // Vẽ lần 1 (cột hiện tại)
+        // Vẽ lần 1
         oled->buffer[page * 128 + start_segment + byte_index] = inverted_byte;
 
-        // PHÓNG TO NGANH 2X: Vẽ thêm 8 pixel nữa ngay bên cạnh
+        // PHÓNG TO NGANH 2X
         if (start_segment + 8 + byte_index < 128) {
             oled->buffer[page * 128 + start_segment + 8 + byte_index] = inverted_byte;
         }

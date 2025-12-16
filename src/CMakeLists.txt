@@ -4,6 +4,7 @@ idf_component_register(SRCS "main.c"
                             "algorithm.c" 
                             "spi_dummy.c" 
                             "oled_driver.c" 
-                            "mpu6050_api.c"  
+                            "mpu6050_api.c"
+                            "wifi_init.c"  
                         INCLUDE_DIRS "."
-                        REQUIRES )
+                        REQUIRES driver esp_common freertos)
